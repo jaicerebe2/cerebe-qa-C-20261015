@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, macos-13, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -60,11 +60,15 @@ jobs:
           $rel = Invoke-RestMethod https://api.github.com/repos/cerebe-ai/cerebe/releases/latest
           $v = $rel.tag_name.TrimStart('v'); Write-Host "Release $($rel.tag_name) ($($rel.html_url)) arch=$arch"
           $bin = Join-Path $env:RUNNER_TEMP 'cerebe-bin'; New-Item -ItemType Directory -Force $bin | Out-Null
-          $sums = (Invoke-WebRequest ($rel.assets | ? name -eq 'checksums.txt').browser_download_url).Content
+          $sumsFile = Join-Path $env:RUNNER_TEMP 'checksums.txt'
+          Invoke-WebRequest ($rel.assets | ? name -eq 'checksums.txt').browser_download_url -OutFile $sumsFile
+          $sums = Get-Content $sumsFile
           foreach ($b in 'cerebe','cyclone') {
             $n = "${b}_${v}_windows_${arch}.zip"; $zip = Join-Path $env:RUNNER_TEMP $n
             Invoke-WebRequest ($rel.assets | ? name -eq $n).browser_download_url -OutFile $zip
-            $want = (($sums -split "`n") | ? { $_ -match " $([regex]::Escape($n))$" }).Split(' ')[0]
+            $line = $sums | ? { $_.Trim() -match "\s\*?$([regex]::Escape($n))$" } | Select-Object -First 1
+            if (-not $line) { throw "no checksum line for $n" }
+            $want = ($line.Trim() -split '\s+')[0].ToLower()
             $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
             Write-Host "$n sha256 $got expected $want"; if ($got -ne $want) { throw "checksum mismatch: $n" }
             Expand-Archive $zip -DestinationPath $bin -Force
