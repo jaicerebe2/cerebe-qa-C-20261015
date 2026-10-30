@@ -1,0 +1,89 @@
+# Cerebe CLI install check: follows https://cerebe.ai/install and
+# https://cerebe.ai/docs/factory/install as written. No auth, no secrets.
+name: cerebe-install-check
+on:
+  workflow_dispatch:
+  push:
+    branches: [qa/install-check]
+permissions:
+  contents: read
+jobs:
+  unix:
+    name: install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: demo-repo
+    steps:
+      - name: Scratch git checkout (install runs "from the repo")
+        working-directory: .
+        run: |
+          mkdir demo-repo && cd demo-repo && git init -q -b main .
+          git -c user.name=qa -c user.email=qa@example.invalid commit -q --allow-empty -m init
+      - name: "Documented install: curl -fsSL https://cerebe.ai/install.sh | sh"
+        run: |
+          set -o pipefail
+          echo '$ curl -fsSL https://cerebe.ai/install.sh | sh'
+          curl -fsSL https://cerebe.ai/install.sh | sh; rc=$?; echo "exit=$rc"
+          for d in /usr/local/bin "$HOME/.local/bin"; do [ -x "$d/cerebe" ] && echo "$d" >> "$GITHUB_PATH"; done
+          exit $rc
+      - name: Verify
+        run: |
+          fail=0
+          run() { echo "::group::\$ $*"; "$@"; rc=$?; echo "::endgroup::"; echo "\$ $* -> exit=$rc"; [ $rc -eq 0 ] || fail=1; }
+          run which cerebe cyclone
+          run cerebe --version
+          run cyclone --version
+          run cerebe --help
+          cerebe --help | grep -qE '^ +login ' && echo "login listed: yes" || { echo "login listed: NO (page says it must be)"; fail=1; }
+          # CI=true makes install.sh binaries-only; the page's documented next step is `cerebe install`.
+          [ -d cerebe ] || run cerebe install
+          run cerebe doctor
+          run git status --short
+          exit $fail
+  windows:
+    name: install (windows-latest)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: "Documented Windows install: Releases-page .zip archives, extract, add to PATH"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+          $rel = Invoke-RestMethod https://api.github.com/repos/cerebe-ai/cerebe/releases/latest
+          $v = $rel.tag_name.TrimStart('v'); Write-Host "Release $($rel.tag_name) ($($rel.html_url)) arch=$arch"
+          $bin = Join-Path $env:RUNNER_TEMP 'cerebe-bin'; New-Item -ItemType Directory -Force $bin | Out-Null
+          $sums = (Invoke-WebRequest ($rel.assets | ? name -eq 'checksums.txt').browser_download_url).Content
+          foreach ($b in 'cerebe','cyclone') {
+            $n = "${b}_${v}_windows_${arch}.zip"; $zip = Join-Path $env:RUNNER_TEMP $n
+            Invoke-WebRequest ($rel.assets | ? name -eq $n).browser_download_url -OutFile $zip
+            $want = (($sums -split "`n") | ? { $_ -match " $([regex]::Escape($n))$" }).Split(' ')[0]
+            $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+            Write-Host "$n sha256 $got expected $want"; if ($got -ne $want) { throw "checksum mismatch: $n" }
+            Expand-Archive $zip -DestinationPath $bin -Force
+          }
+          Get-ChildItem $bin -Recurse | Select-Object FullName
+          (Get-ChildItem $bin -Recurse -Filter cerebe.exe | Select-Object -First 1).DirectoryName | Out-File -Append $env:GITHUB_PATH
+          (Get-ChildItem $bin -Recurse -Filter cyclone.exe | Select-Object -First 1).DirectoryName | Out-File -Append $env:GITHUB_PATH
+      - name: Verify (cerebe install from a scratch repo, then checks)
+        run: |
+          $fail = 0
+          function Run([string]$c) { Write-Host "::group::> $c"; $global:LASTEXITCODE = 0; Invoke-Expression $c; $rc = $LASTEXITCODE; Write-Host "::endgroup::"; Write-Host "> $c -> exit=$rc"; if ($rc -ne 0) { $script:fail = 1 } }
+          $repo = Join-Path $env:RUNNER_TEMP 'demo-repo'; New-Item -ItemType Directory $repo | Out-Null; Set-Location $repo
+          git init -q -b main .; git -c user.name=qa -c user.email=qa@example.invalid commit -q --allow-empty -m init
+          Run 'Get-Command cerebe, cyclone | Select-Object Source'
+          Run 'cerebe --version'
+          Run 'cyclone --version'
+          Run 'cerebe --help'
+          if ((cerebe --help) -match '^\s+login\s') { Write-Host 'login listed: yes' } else { Write-Host 'login listed: NO'; $fail = 1 }
+          Run 'cerebe install'
+          Run 'cerebe doctor'
+          Run 'git status --short'
+          exit $fail
