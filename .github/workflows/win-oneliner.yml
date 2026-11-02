@@ -1,0 +1,72 @@
+name: windows-oneliner-check
+on:
+  push:
+    branches: [qa/win-oneliner]
+  workflow_dispatch:
+jobs:
+  win:
+    runs-on: windows-latest
+    steps:
+      - name: 1 Install via one-liner
+        id: install
+        continue-on-error: true
+        shell: pwsh
+        run: powershell -ExecutionPolicy ByPass -c "irm https://cerebe.ai/install.ps1 | iex"
+      - name: 2 PATH in fresh environment
+        id: path
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+          where.exe cerebe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cerebe --version
+          cerebe --help
+      - name: 3 Repo setup and doctor
+        id: doctor
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+          New-Item -ItemType Directory demo | Out-Null
+          Set-Location demo
+          git init -b main
+          git config user.email qa@example.com
+          git config user.name qa
+          Set-Content README.md "demo"
+          git add .
+          git commit -m "init"
+          cerebe install
+          if ($LASTEXITCODE -ne 0) { Write-Host "cerebe install exit $LASTEXITCODE"; exit 1 }
+          cerebe doctor
+          $d = $LASTEXITCODE
+          Write-Host "doctor exit $d"
+          Get-ChildItem .git/hooks | Format-Table Name
+          exit $d
+      - name: 4 Upgrade check
+        id: upgrade
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+          cerebe upgrade --check
+          Write-Host "upgrade exit $LASTEXITCODE"
+          exit $LASTEXITCODE
+      - name: 5 Commit triggers local review
+        id: review
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+          Set-Location demo
+          New-Item -ItemType Directory src -Force | Out-Null
+          Set-Content src/calc.ts "export function calc(expr: string) { return eval(expr); }"
+          git add .
+          git commit -m "add calc" 2>&1 | Tee-Object -FilePath ../commit-output.txt
+          Write-Host "commit exit $LASTEXITCODE"
+          Get-Content ../commit-output.txt
+      - name: Summary
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "install=${{ steps.install.outcome }} path=${{ steps.path.outcome }} doctor=${{ steps.doctor.outcome }} upgrade=${{ steps.upgrade.outcome }} review_step=${{ steps.review.outcome }}"
