@@ -7,6 +7,8 @@ on:
     branches: [qa/install-check]
 permissions:
   contents: read
+env:
+  EXPECTED_VERSION: v9.16.0   # exact `cerebe --version` / `cyclone --version` output
 jobs:
   unix:
     name: install (${{ matrix.os }})
@@ -29,6 +31,8 @@ jobs:
         run: |
           set -o pipefail
           echo '$ curl -fsSL https://cerebe.ai/install.sh | sh'
+          # Pin the release under test (install.sh honours CEREBE_VERSION, without the 'v').
+          export CEREBE_VERSION="${EXPECTED_VERSION#v}"
           curl -fsSL https://cerebe.ai/install.sh | sh; rc=$?; echo "exit=$rc"
           for d in /usr/local/bin "$HOME/.local/bin"; do [ -x "$d/cerebe" ] && echo "$d" >> "$GITHUB_PATH"; done
           exit $rc
@@ -39,6 +43,11 @@ jobs:
           run which cerebe cyclone
           run cerebe --version
           run cyclone --version
+          for b in cerebe cyclone; do
+            got="$($b --version 2>&1 | tr -d '\r' | head -n1)"
+            if [ "$got" = "$EXPECTED_VERSION" ]; then echo "$b version OK: $got"
+            else echo "::error::$b --version is '$got', expected '$EXPECTED_VERSION'"; fail=1; fi
+          done
           run cerebe --help
           cerebe --help | grep -qE '^ +login ' && echo "login listed: yes" || { echo "login listed: NO (page says it must be)"; fail=1; }
           # CI=true makes install.sh binaries-only; the page's documented next step is `cerebe install`.
@@ -57,7 +66,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
-          $rel = Invoke-RestMethod https://api.github.com/repos/cerebe-ai/cerebe/releases/latest
+          # Pin the release under test instead of 'latest'.
+          $rel = Invoke-RestMethod "https://api.github.com/repos/cerebe-ai/cerebe/releases/tags/$env:EXPECTED_VERSION"
+          if ($rel.tag_name -ne $env:EXPECTED_VERSION) { throw "release tag $($rel.tag_name) != $env:EXPECTED_VERSION" }
           $v = $rel.tag_name.TrimStart('v'); Write-Host "Release $($rel.tag_name) ($($rel.html_url)) arch=$arch"
           $bin = Join-Path $env:RUNNER_TEMP 'cerebe-bin'; New-Item -ItemType Directory -Force $bin | Out-Null
           $sumsFile = Join-Path $env:RUNNER_TEMP 'checksums.txt'
@@ -85,6 +96,10 @@ jobs:
           Run 'Get-Command cerebe, cyclone | Select-Object Source'
           Run 'cerebe --version'
           Run 'cyclone --version'
+          foreach ($b in 'cerebe','cyclone') {
+            $got = ((& $b --version 2>&1) | Select-Object -First 1).ToString().Trim()
+            if ($got -ceq $env:EXPECTED_VERSION) { Write-Host "$b version OK: $got" } else { Write-Host "::error::$b --version is '$got', expected '$env:EXPECTED_VERSION'"; $fail = 1 }
+          }
           Run 'cerebe --help'
           if ((cerebe --help) -match '^\s+login\s') { Write-Host 'login listed: yes' } else { Write-Host 'login listed: NO'; $fail = 1 }
           Run 'cerebe install'
