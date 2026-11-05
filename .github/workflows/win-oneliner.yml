@@ -1,4 +1,7 @@
 name: windows-oneliner-check
+# retest on v9.16.0 (5 Nov 2026)
+env:
+  EXPECTED_VERSION: v9.16.0
 on:
   push:
     branches: [qa/win-oneliner]
@@ -20,7 +23,9 @@ jobs:
           $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
           where.exe cerebe
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          cerebe --version
+          $v = (cerebe --version | Select-Object -First 1).Trim(); Write-Host "cerebe version: $v"
+          $cy = (cyclone --version | Select-Object -First 1).Trim(); Write-Host "cyclone version: $cy"
+          if ($v -cne $env:EXPECTED_VERSION -or $cy -cne $env:EXPECTED_VERSION) { Write-Host "::error::version mismatch, expected $env:EXPECTED_VERSION"; exit 1 }
           cerebe --help
       - name: 3 Repo setup and doctor
         id: doctor
