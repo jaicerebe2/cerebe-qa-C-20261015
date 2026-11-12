@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 env:
-  EXPECTED_VERSION: v9.17.0   # exact `cerebe --version` / `cyclone --version` output
+  EXPECTED_VERSION: v9.18.0   # exact `cerebe --version` / `cyclone --version` output
 jobs:
   unix:
     name: install (${{ matrix.os }})
